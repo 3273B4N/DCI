@@ -1,105 +1,102 @@
-#Description:
-#Generic Asic_program to communicate the ASIC SIWA to the FPGA version
-#HOW TO USE IT IN ANY PROGRAM
-#1) Paste the .equ lines (PART 1) with the other .equ of your program
-#2) Address 0x00 must be "jal x0,_main" and address 0x04 must be the interrupt handler (PART 2).
-#   If your program already has a handler, merge the "li s3,1" into it.
-#3) Paste the driver (PART 3) anywhere after that
-#4) In your main: initialize sp, then "jal ra,_oled_init" once
-#5) Whenever you want to write: jal ra,_oled_clear / _oled_set_cursor / _oled_putc / _oled_write_hex
-#
-#RESERVED REGISTERS 
-#s3 holds the tick event 
-#t5 and t6 are used only by the interrupt handler
-#The driver clobbers a0, a1, t0-t2 and preserves all the s registers (except s3).
-#s2 holds the uart address 
-#s4 holds the old uart value
-
 .section .text
-.globl _start
+.globl start
 
-.equ data_mem, 0x00001000	# adress where the packets are stored (only 4 bytes are used). 
-.equ stack_top, 0x00001800  # last RAM address (16-byte aligned). It must not overlap data_mem
+.eqv SW_MASK,0x7F 
+.eqv SRCANDCODE_MASK, 0x3E000000
+.eqv UARTRD1BYTE, 0x23000000
+.eqv UARTDATA_ADDR, 0x2000
+
+#OLED values
+.equ data_mem, 0x00001000 #address where the packets are stored (only 4 bytes are used). It must be RAM
+.equ stack_top, 0x00001800	#last RAM address (16-byte aligned). It must not overlap data_mem
 .equ tick_count, 5000	   #50ns x 5000 counts = 250us each tick
-.eqv SW_MASK  ,0x7F 
-_start:
-	#requiered code in order for the UART to work
-       # csrrwi x0,5,0x10
-       # csrrwi x0,6,0x1F
-       # csrrsi x0,0,0x02
 
-	jal x0,_main
+start:
+	la t2, int_handler # load the direction of the interrupt handler into t2
+        csrrw x0,5,t2 #set direction of the instruction handler (see how to set the direction)
+        csrrsi x0,0,0x03  #enables the UART, SPI and timer interrupt enables
+	li sp,stack_top	#the stack is required by the OLED
+	jal ra,_oled_init #start the oled
+	jal ra,_oled_clear # clear the oled
+	jal ra, test_uart_send # erase this function when the program is implemented
+	jal x0,main
+
 int_handler:
+	csrrsi x0,0,0x00 #disables all the interrupt enables
+	csrrs t5,3,x0	#read the mcauseB CSR 
+	li t1,SRCANDCODE_MASK # register that holds the src and code mask
+	and t5,t5,t1 #mask the source and code bits
+	li t6,UARTRD1BYTE# value to see if it is a uart read byte value
+	beq t5,t6,is_uart # if the interrupt correspond to the uart read 1 byte, go to the function
+	
+	csrrs t5,2,x0	# else, read the mcauseA CSR and check if timer code happened (3'b011)
+	andi t6,t5,7	#mask the timer interuption
+	li t5,3	#011 code 
+	beq t5,t6,is_timer # if the interrupt correspond to the timer go to the function
+	
+	j return # else just return to the main function
 
-#On the interrupt handler, check if the timer bit is set
-	csrrs t5,2,x0	#read the mcauseA CSR and check if timer code happened (3'b011)
-	andi t6,t5,7	#mask the code bits (mcause bits 25, 26 and 27) and discard the rest
-	li t5,3	#011 code
-	bne t5,t6,_return
-	li s3,1	#raise flag if timer code appeared
-_return:
+	is_uart:
+		jal ra, uart_save #jump to the load data function
+		jal ra, modify_data
+		jal ra, send_uart # send data through uart 
+		j return # return to the loop function
+
+	is_timer:
+		li s3,1	#raise flag if timer code appeared
+		j return
+	
+return:
+        csrrsi x0,0,0x03 #enables the UART and SPI interrupt enables and the timer
 	mret	#return to the main program
 
-_main:
-	addi t3, t3, 0x0 # initialize uart initial value 
-	li sp,stack_top	#the stack is required by the driver
-	jal ra,_oled_init	#call it once, at the start
-	jal ra,_oled_clear	#clears the screen
-	jal test_uart_send #fuction to test the functionality of the program must be commented out when implemented
-		loop:
-			jal uart_sampling          #function to continuously sample the uart
-			addi a0,s1,0	#save the received data into the oled
-			jal ra,_oled_write_hex
-			# modify data from the uart and send it   
-			jal modify_data
-			jal send_uart
-		j loop
-   	
-	
-	
-_done:
-	j _done
+main:  #loop function to wait for the UART data
+	#check if the uart data flag is not set then loop, else write data on the OLED
+	beqz s4, main
+	la t0, UARTDATA_ADDR 
+	lb a0, 0(t0) #load the data in the UART data addres
+	jal ra,_oled_write_hex	#write it on the oled
+	 #set the uart flag to zero: no new data
+	li s4, 0
+	j main
 
+#AUX functions
+uart_save:
+	 lui t0, 0x989 #Construct UART address
+	 lb s1, 0x680(t0) # Read byte from uart to s1
+	 la t0, UARTDATA_ADDR
+	 sb s1, 0(t0) #store the data in the UART data addres
+	  li s4, 1 #set a flag to see that there is new uart data
+	 ret #return
 
-test_uart_send:
-	     lui s2, 0x989
-	     addi s2, s2, 0x680 #UART base address
-            li t4, 0xF
-	    sw t4, 0(s2)
-	    ret
-	
-
-uart_sampling:
-	    lui s2, 0x989
-	    addi s2, s2, 0x680 #UART base address
-	    lw   s1, (s2)      # loads data from UART
-	    andi s1, t0, SW_MASK             # keep only the data
-	    beqz s1, uart_sampling             # byte == 0 -> no new data
-	    beq s1, t3, uart_sampling # if its the same value keep sampling
-	    addi t3, s3, 0 #update old value
-	    ret # else return to loop
-
-
-	  
 modify_data:
 	#data received from the uart is in s1
 	addi s1, s1, 1
-	ret # return to loop
-
+	ret # return 	
 send_uart:
-	lui s2, 0x989
-	 addi s2, s2, 0x680 #UART base address
-	    sw s1, 0(s2)
+	 sb s1, 0x680(t0) # send byte through the uart
+	 ret #return
 
-#Driver for the OLED
-#functions:
+test_uart_send:
+	    li t4, 1
+            lui s2, 0x989
+	    addi s2, s2, 0x680
+	    sw t4, 0(s2)
+	    ret
+
+
+
+
+#-------------------------------------------------------------------------------
+#PART 3: DRIVER
+#Public functions:
 #_oled_init: call once (sets up the GPIO, the timer, resets and initializes the OLED)
 #_oled_clear: clears the display, cursor goes to line 1 column 0
 #_oled_set_cursor: a0 = DDRAM address (0x00 line 1, 0x40 line 2)
 #_oled_putc: a0 = ASCII character, written at the cursor (the cursor moves by itself)
 #_oled_write_hex: a0 = byte, written at the cursor as "0xNN"
 #_oled_cmd: a0 = any OLED command byte
-
+#-------------------------------------------------------------------------------
 _oled_clear:
 	li a0,0x00000001	#clear display and set DDRAM addr to 0'h
 	j _oled_cmd
@@ -143,7 +140,7 @@ _oled_init:
 	addi sp,sp,-16
 	sw ra,12(sp)
 #-------------------------------------------------------------------------------
-#GPIO0-3 to '1', CSR read mode, interrupt addr and timer 
+#GPIO0-3 to '1', CSR read mode, interrupt addr and timer (same values and order as the demo)
 #-------------------------------------------------------------------------------
 	li t0,0x0000000F
 	li t1,0x00010000
@@ -163,7 +160,7 @@ _oled_init:
 	li a1,0
 	jal ra,_oled_run
 #-------------------------------------------------------------------------------
-#Commmand sequence
+#Command sequence of the demo
 #-------------------------------------------------------------------------------
 	li a0,0x00000028	#Change to Fundamental Function set: two-line display, 5x8 character font
 	jal ra,_oled_cmd
@@ -428,3 +425,8 @@ _end:
 	lw ra,44(sp)
 	addi sp,sp,48
 	jalr x0,0(ra)
+
+
+
+
+

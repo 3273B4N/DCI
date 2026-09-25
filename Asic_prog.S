@@ -19,9 +19,19 @@ start:
 	jal ra,_oled_init #start the oled
 	jal ra,_oled_clear # clear the oled
 	jal ra, test_uart_send # erase this function when the program is implemented
+	li s4, 0           # Initialize UART data flag
 	jal x0,main
 
 int_handler:
+	#save the context
+	addi sp, sp, -32
+	sw t1, 0(sp)
+	sw t5, 4(sp)
+	sw t6, 8(sp)
+	sw ra, 12(sp)
+	sw t0, 16(sp)
+	sw s1, 20(sp)
+
 	csrrsi x0,0,0x00 #disables all the interrupt enables
 	csrrs t5,3,x0	#read the mcauseB CSR 
 	li t1,SRCANDCODE_MASK # register that holds the src and code mask
@@ -48,6 +58,14 @@ int_handler:
 	
 return:
         csrrsi x0,0,0x03 #enables the UART and SPI interrupt enables and the timer
+	#restore context
+	lw s1, 20(sp)
+	lw t0, 16(sp)
+	lw ra, 12(sp)
+	lw t6, 8(sp)
+	lw t5, 4(sp)
+	lw t1, 0(sp)
+	addi sp, sp, 32
 	mret	#return to the main program
 
 main:  #loop function to wait for the UART data

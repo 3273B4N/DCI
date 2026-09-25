@@ -1,5 +1,5 @@
 .section .text
-.globl start
+.globl _start
 
 .eqv SW_MASK,0x7F 
 .eqv SRCANDCODE_MASK, 0x3E000000
@@ -11,7 +11,7 @@
 .equ stack_top, 0x00001800	#last RAM address (16-byte aligned). It must not overlap data_mem
 .equ tick_count, 5000	   #50ns x 5000 counts = 250us each tick
 
-start:
+_start:
 	la t2, int_handler # load the direction of the interrupt handler into t2
         csrrw x0,5,t2 #set direction of the instruction handler (see how to set the direction)
         csrrsi x0,0,0x03  #enables the UART, SPI and timer interrupt enables
@@ -32,7 +32,7 @@ int_handler:
 	sw t0, 16(sp)
 	sw s1, 20(sp)
 
-	csrrsi x0,0,0x00 #disables all the interrupt enables
+	csrrci x0,0,0x00 #disables all the interrupt enables
 	csrrs t5,3,x0	#read the mcauseB CSR 
 	li t1,SRCANDCODE_MASK # register that holds the src and code mask
 	and t5,t5,t1 #mask the source and code bits
@@ -92,6 +92,7 @@ modify_data:
 	addi s1, s1, 1
 	ret # return 	
 send_uart:
+         lui t0, 0x989 #Construct UART address
 	 sb s1, 0x680(t0) # send byte through the uart
 	 ret #return
 

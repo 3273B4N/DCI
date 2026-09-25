@@ -1,10 +1,10 @@
 .section .text
-.globl start
+.globl _start
 .eqv SW_MASK,0x7F 
 .eqv SRCANDCODE_MASK, 0x3E000000
 .eqv UARTRD1BYTE, 0x23000000
 
-start:
+_start:
 	la   t2, int_handler # load the direction of the interrupt handler into t2
         csrrw x0,5,t2 #set direction of the instruction handler (see how to set the direction)
         csrrsi x0,0,0x02 #enables the UART and SPI interrupt enables

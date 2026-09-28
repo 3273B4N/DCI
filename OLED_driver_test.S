@@ -1,111 +1,73 @@
+#Description:
+#Generic OLED driver based on the "Hello World" demo: it is the SAME state machine (same states, same timing, same
+#GPIO/CSR handling). The I2C protocol is emulated with GPIO0-3 and the timer interrupt:
+#GPIO0 is SA0
+#GPIO1 is /RST
+#GPIO2 is SDA
+#GPIO3 is SCL
+#-------------------------------------------------------------------------------
+#Differences with the demo (everything else is copied as it is):
+#1) The packet table is not fixed anymore: every call builds its packets in data_mem and runs the state machine
+#2) When the packets have been sent, the state machine returns to the caller (_end) instead of playing with LEDs
+#3) The interrupt handler uses t5/t6 (instead of t0/t1) and the wait loop uses t0 (instead of t6), so an
+#   interrupt can never corrupt the registers of the rest of your program
+#4) The s registers used by the state machine are saved and restored in the stack
+#-------------------------------------------------------------------------------
+#HOW TO USE IT IN ANY PROGRAM
+#1) Paste the .equ lines (PART 1) with the other .equ of your program
+#2) Address 0x00 must be "jal x0,_main" and address 0x04 must be the interrupt handler (PART 2).
+#   If your program already has a handler, merge the "li s3,1" into it.
+#3) Paste the driver (PART 3) anywhere after that
+#4) In your main: initialize sp, then "jal ra,_oled_init" once
+#5) Whenever you want to write: jal ra,_oled_clear / _oled_set_cursor / _oled_putc / _oled_write_hex
+#
+#RESERVED REGISTERS (do not use them in the rest of your program):
+#s3 holds the tick event (same register as the demo)
+#t5 and t6 are used only by the interrupt handler
+#The driver clobbers a0, a1, t0-t2 and preserves all the s registers (except s3).
+#The labels of the state machine are the demo ones (_check, _rst_1, _init, _scl_1, _loop, _end...), do not repeat them.
+#-------------------------------------------------------------------------------
 .section .text
 .globl _start
-
-.eqv SW_MASK,0x7F 
-.eqv SRCANDCODE_MASK, 0x3E000000
-.eqv UARTRD1BYTE, 0x23000000
-.eqv UARTDATA_ADDR, 0x2000
-
-#OLED values
-.equ data_mem, 0x00001000 #address where the packets are stored (only 4 bytes are used). It must be RAM
-.equ stack_top, 0x00001800	#last RAM address (16-byte aligned). It must not overlap data_mem
+#-------------------------------------------------------------------------------
+#PART 1: constants
+#-------------------------------------------------------------------------------
+.equ data_mem, 0x00001000	#TODO: address where the packets are stored (only 4 bytes are used). It must be RAM
+.equ stack_top, 0x00001800	#TODO: last RAM address (16-byte aligned). It must not overlap data_mem
 .equ tick_count, 5000	   #50ns x 5000 counts = 250us each tick
-
+#-------------------------------------------------------------------------------
+#PART 2: start of the program (address 0x00 and 0x04)
+#-------------------------------------------------------------------------------
 _start:
-	la t2, int_handler # load the direction of the interrupt handler into t2
-        csrrw x0,5,t2 #set direction of the instruction handler (see how to set the direction)
-        csrrsi x0,0,0x03  #enables the UART, SPI and timer interrupt enables
-	li sp,stack_top	#the stack is required by the OLED
-	jal ra,_oled_init #start the oled
-	jal ra,_oled_clear # clear the oled
-	jal ra, test_uart_send # erase this function when the program is implemented
-	li s4, 0           # Initialize UART data flag
-	jal x0,main
-
+	jal x0,_main
 int_handler:
-	#save the context
-	addi sp, sp, -32
-	sw t1, 0(sp)
-	sw t5, 4(sp)
-	sw t6, 8(sp)
-	sw ra, 12(sp)
-	sw t0, 16(sp)
-	sw s1, 20(sp)
-
-	csrrci x0,0,0x03 #disables all the interrupt enables
-	csrrs t5,3,x0	#read the mcauseB CSR 
-	li t1,SRCANDCODE_MASK # register that holds the src and code mask
-	and t5,t5,t1 #mask the source and code bits
-	li t6,UARTRD1BYTE# value to see if it is a uart read byte value
-	beq t5,t6,is_uart # if the interrupt correspond to the uart read 1 byte, go to the function
-	
-	csrrs t5,2,x0	# else, read the mcauseA CSR and check if timer code happened (3'b011)
-	andi t6,t5,7	#mask the timer interuption
-	li t5,3	#011 code 
-	beq t5,t6,is_timer # if the interrupt correspond to the timer go to the function
-	
-	j return # else just return to the main function
-
-	is_uart:
-		jal ra, uart_save #jump to the load data function
-		jal ra, modify_data
-		jal ra, send_uart # send data through uart 
-		j return # return to the loop function
-
-	is_timer:
-		li s3,1	#raise flag if timer code appeared
-		j return
-	
-return:
-        csrrsi x0,0,0x03 #enables the UART and SPI interrupt enables and the timer
-	#restore context
-	lw s1, 20(sp)
-	lw t0, 16(sp)
-	lw ra, 12(sp)
-	lw t6, 8(sp)
-	lw t5, 4(sp)
-	lw t1, 0(sp)
-	addi sp, sp, 32
+#-------------------------------------------------------------------------------
+#On the interrupt handler, check if the timer bit is set
+#-------------------------------------------------------------------------------
+	csrrs t5,2,x0	#read the mcauseA CSR and check if timer code happened (3'b011)
+	andi t6,t5,7	#mask the code bits (mcause bits 25, 26 and 27) and discard the rest
+	li t5,3	#011 code
+	bne t5,t6,_return
+	li s3,1	#raise flag if timer code appeared
+_return:
 	mret	#return to the main program
-
-main:  #loop function to wait for the UART data
-	#check if the uart data flag is not set then loop, else write data on the OLED
-	beqz s4, main
-	la t0, UARTDATA_ADDR 
-	lb a0, 0(t0) #load the data in the UART data addres
-	jal ra,_oled_write_hex	#write it on the oled
-	 #set the uart flag to zero: no new data
-	li s4, 0
-	j main
-
-#AUX functions
-uart_save:
-	 lui t0, 0x989 #Construct UART address
-	 lb s1, 0x680(t0) # Read byte from uart to s1
-	 la t0, UARTDATA_ADDR
-	 sb s1, 0(t0) #store the data in the UART data addres
-	  li s4, 1 #set a flag to see that there is new uart data
-	 ret #return
-
-modify_data:
-	#data received from the uart is in s1
-	addi s1, s1, 1
-	ret # return 	
-send_uart:
-         lui t0, 0x989 #Construct UART address
-	 sb s1, 0x680(t0) # send byte through the uart
-	 ret #return
-
-test_uart_send:
-	    li t4, 1
-            lui s2, 0x989
-	    addi s2, s2, 0x680
-	    sw t4, 0(s2)
-	    ret
-
-
-
-
+#-------------------------------------------------------------------------------
+#YOUR PROGRAM (example of how to use the driver)
+#-------------------------------------------------------------------------------
+_main:
+	li sp,stack_top	#the stack is required by the driver
+	jal ra,_oled_init	#call it once, at the start
+	jal ra,_oled_clear
+	li a0,0x00000048	#letter "H"
+	jal ra,_oled_putc
+	li a0,0x00000069	#letter "i"
+	jal ra,_oled_putc
+	li a0,0x00000040	#line 2, column 0
+	jal ra,_oled_set_cursor
+	li a0,0x000000A5	#any byte in a0 ...
+	jal ra,_oled_write_hex	#... it is shown as "0xA5"
+_done:
+	j _done
 #-------------------------------------------------------------------------------
 #PART 3: DRIVER
 #Public functions:
@@ -164,10 +126,10 @@ _oled_init:
 	li t0,0x0000000F
 	li t1,0x00010000
 	li t2,tick_count
-	#li t3,4
+	li t3,4
 	csrrw x0,0,t1
 	csrrw x0,4,t0
-	#csrrw x0,5,t3
+	csrrw x0,5,t3
 	csrrw x0,6,t2
 	li s3,0
 	li t1,0x00010001
@@ -444,8 +406,3 @@ _end:
 	lw ra,44(sp)
 	addi sp,sp,48
 	jalr x0,0(ra)
-
-
-
-
-

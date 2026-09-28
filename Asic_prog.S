@@ -164,10 +164,10 @@ _oled_init:
 	li t0,0x0000000F
 	li t1,0x00010000
 	li t2,tick_count
-	li t3,4
+	#li t3,4
 	csrrw x0,0,t1
 	csrrw x0,4,t0
-	csrrw x0,5,t3
+	#csrrw x0,5,t3
 	csrrw x0,6,t2
 	li s3,0
 	li t1,0x00010001

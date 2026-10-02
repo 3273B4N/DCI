@@ -4,7 +4,7 @@
 .eqv SW_MASK,0x7F 
 .eqv SRCANDCODE_MASK, 0x3E000000
 .eqv UARTRD, 0x20000000
-.eqv UARTDATA_ADDR, 0x2000
+.eqv UARTDATA_ADDR, 0x1004
 
 #OLED values
 .eqv data_mem, 0x00001000  #address where the packets are stored (only 4 bytes are used). It must be RAM
@@ -94,8 +94,8 @@ main:
 #-------------------------------------------------------------------------------
 # uncomment instructions when implemneting
 uart_save:
-	lui t0, 0x989              #construct UART RX address: 0x989680
-	lw s1, 0x680(t0)           #read byte from UART into s1
+	li t0, 0x00800000              #construct UART RX address: 0x989680
+	lw s1, 0(t0)           #read byte from UART into s1
 	li t0, UARTDATA_ADDR       #address of the shared data buffer
 	sw s1, 0(t0)               #store received byte there
 	li s4, 1                   #set flag: new UART data available
@@ -106,8 +106,8 @@ modify_data:
 	ret
 
 send_uart:
-	lui t0, 0x989              #construct UART TX address: 0x989680
-	sw s1, 0x680(t0)           #send modified byte through UART
+	lui t0,0x00800000              #construct UART TX address: 0x989680
+	sw s1, 0(t0)           #send modified byte through UART
 	ret
 
 test_uart_send:
@@ -115,8 +115,7 @@ test_uart_send:
 	#this triggers a UART RX interrupt on the other side
 	#remove this function call from _start when running on real hardware
 	li t4, 1
-	lui s2, 0x989 #(temporary uncomment when implementing)
-	addi s2, s2, 0x680
+	li s2, 0x00800000 #(temporary uncomment when implementing)
 	sw t4, 0(s2)
 	ret
 

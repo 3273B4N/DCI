@@ -2,13 +2,14 @@
 .globl _start
 
 .eqv SW_MASK,0x7F 
-.eqv SRCANDCODE_MASK, 0x3E000000
-.eqv UARTRD, 0x20000000
-.eqv UARTDATA_ADDR, 0x1004
+.eqv SRCANDCODE_MASK, 0x7 
+.eqv UARTRD, 0x02
+.eqv UARTDATA_ADDR, 0x00001004
+.eqv UART_DATA_FLAG,  0x00001008 
 
 #OLED values
 .eqv data_mem, 0x00001000  #address where the packets are stored (only 4 bytes are used). It must be RAM
-.eqv stack_top, 0x00001800 #last RAM address (16-byte aligned). It must not overlap data_mem
+.eqv stack_top, 0x2000 #last RAM address (16-byte aligned). It must not overlap data_mem
 .eqv tick_count, 5000      #50ns x 5000 counts = 250us each tick
 
 _start:
@@ -30,26 +31,51 @@ _start:
 
 int_handler:
 	#save the context: all registers used inside this handler or any function it calls
-	addi sp, sp, -32
-	sw t1, 0(sp)
-	sw t5, 4(sp)
-	sw t6, 8(sp)
-	sw ra, 12(sp)
-	sw t0, 16(sp)
-	sw s1, 20(sp)
-	#note: s3 and s4 are intentionally NOT saved/restored:
-	#  s3 = timer tick flag, must survive to be read by _oled_run's _loop
-	#  s4 = UART data flag, must survive to be read by main
+	addi sp, sp, -128
+	    sw ra,   4(sp)
+	    sw gp,  12(sp)
+	    sw tp,  16(sp)
+	    sw t0,  20(sp)
+	    sw t1,  24(sp)
+	    sw t2,  28(sp)
+	    sw s0,  32(sp)   
+	    sw s1,  36(sp)
+	    sw a0,  40(sp)
+	    sw a1,  44(sp)
+	    sw a2,  48(sp)
+	    sw a3,  52(sp)
+	    sw a4,  56(sp)
+	    sw a5,  60(sp)
+	    sw a6,  64(sp)
+	    sw a7,  68(sp)
+	    sw s2,  72(sp)
+	    sw s3,  76(sp)
+	    sw s4,  80(sp)
+	    sw s5,  84(sp)
+	    sw s6,  88(sp)
+	    sw s7,  92(sp)
+	    sw s8,  96(sp)
+	    sw s9, 100(sp)
+	    sw s10, 104(sp)
+	    sw s11, 108(sp)
+	    sw t3, 112(sp)
+	    sw t4, 116(sp)
+	    sw t5, 120(sp)
+	    sw t6, 124(sp)
 
-	csrrci x0,0,0x03           #disable all interrupts while inside the handler (no nesting)
+	csrrci x0,0,0x03           #disable all interrupts while inside the handler
 
-	csrrs t5,3,x0              #read mcauseB (peripheral interrupt cause: UART, SPI...)
-	li t1,SRCANDCODE_MASK      #mask to isolate source and code bits
-	and t5,t5,t1
-	li t6,UARTRD          	   #expected value for "UART" interrupt
+	#csrrs t5,2,x0              #read mcauseA
+	#li t1,SRCANDCODE_MASK      #mask to isolate source and code bits
+	#and t5,t5,t1
+	#li t6,UARTRD          	   #expected value for "UART" interrupt
+
+	csrrs t5,2,x0              #else read mcauseA 
+	andi t6,t5,7               #mask timer code bits
+	li t5,2                    #expected value for uart interrupt (011)
 	beq t5,t6,is_uart          #if it matches, handle UART
 
-	csrrs t5,2,x0              #else read mcauseA (core interrupt cause: timer...)
+	csrrs t5,2,x0              #else read mcauseA 
 	andi t6,t5,7               #mask timer code bits
 	li t5,3                    #expected value for timer interrupt (011)
 	beq t5,t6,is_timer
@@ -67,38 +93,68 @@ is_timer:
 return:
 	csrrsi x0,0,0x03           #re-enable UART/SPI and timer interrupts
 	#restore context
-	lw s1, 20(sp)
-	lw t0, 16(sp)
-	lw ra, 12(sp)
-	lw t6, 8(sp)
-	lw t5, 4(sp)
-	lw t1, 0(sp)
-	addi sp, sp, 32
+	lw ra,   4(sp)
+      lw gp,  12(sp)
+      lw tp,  16(sp)
+      lw t0,  20(sp)
+      lw t1,  24(sp)
+      lw t2,  28(sp)
+      lw s0,  32(sp)
+      lw s1,  36(sp)
+      lw a0,  40(sp)
+      lw a1,  44(sp)
+      lw a2,  48(sp)
+      lw a3,  52(sp)
+      lw a4,  56(sp)
+      lw a5,  60(sp)
+      lw a6,  64(sp)
+      lw a7,  68(sp)
+      lw s2,  72(sp)
+      lw s3,  76(sp)
+      lw s4,  80(sp)
+      lw s5,  84(sp)
+      lw s6,  88(sp)
+      lw s7,  92(sp)
+      lw s8,  96(sp)
+      lw s9, 100(sp)
+       lw s10, 104(sp)
+        lw s11, 108(sp)
+        lw t3, 112(sp)
+        lw t4, 116(sp)
+        lw t5, 120(sp)
+	addi sp, sp, 128
 	mret                       #return to the interrupted program (temporary, this was mret)
 
 main:
 	#spin here waiting for a UART interrupt to set s4=1
+	li t0, UART_DATA_FLAG
+	lw s4, 0(t0) #check if flag is available
 	beqz s4, main
 	li s4, 0                   #clear the flag: ready for the next byte
+	sw s4, 0(t0)
 	#new UART data arrived: load it from the shared address and display it on the OLED
-	li t0, UARTDATA_ADDR
-	lw a0, 0(t0)               #load the received byte
-	mv s1, a0 #save it before executing
+	#li t0, UARTDATA_ADDR
+	#lw a0, 0(t0)               #load the received byte
+	#mv s1, a0 #save it before executing
+	li a0,0x00000001
 	jal ra,_oled_write_hex     #display it on the OLED as "0xNN"
-	jal ra, modify_data        #modify the data (s1 += 1)
-	jal ra, send_uart          #send modified data back through UART
+	#jal ra, modify_data        #modify the data (s1 += 1)
+	#jal ra, send_uart          #send modified data back through UART
 	j main
 
-#-------------------------------------------------------------------------------
-#AUX functions
-#-------------------------------------------------------------------------------
+
+#aux functions
+
 # uncomment instructions when implemneting
 uart_save:
-	li t0, 0x00800000              #construct UART RX address: 0x989680
+	lui t0, 0x989  #construct UART RX address
+    	lw s1, 0x680(t0)             
 	lw s1, 0(t0)           #read byte from UART into s1
 	li t0, UARTDATA_ADDR       #address of the shared data buffer
 	sw s1, 0(t0)               #store received byte there
 	li s4, 1                   #set flag: new UART data available
+	li t0, UART_DATA_FLAG
+	sw s4, 0(t0)
 	ret
 
 modify_data:
@@ -106,8 +162,8 @@ modify_data:
 	ret
 
 send_uart:
-	lui t0,0x00800000              #construct UART TX address: 0x989680
-	sw s1, 0(t0)           #send modified byte through UART
+	lui t0, 0x989  #construct UART RX address
+    	sw s1, 0x680(t0)  #send modified byte through UART
 	ret
 
 test_uart_send:
@@ -115,8 +171,8 @@ test_uart_send:
 	#this triggers a UART RX interrupt on the other side
 	#remove this function call from _start when running on real hardware
 	li t4, 1
-	li s2, 0x00800000 #(temporary uncomment when implementing)
-	sw t4, 0(s2)
+	lui s2, 0x989  #construct UART RX address
+	sw t4, 0x680(s2)
 	ret
 
 #-------------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 `timescale 1ns/10ps
 `include "../../TEC_RISCV/TOP/topcore_tecriscv.sv"
-`include "Status.sv"
+//`include "Status.sv"
 `include "IS25WP032D.v"
 `include "coverage_classes.sv"
 `include "instruction_class.sv"
@@ -8,7 +8,7 @@
 `include "Reference_Model.sv"
 `include "Selfcheck.sv"
 
-`define DEBUG
+`undef DEBUG
 
 module topcore_tb;
 
@@ -124,7 +124,12 @@ topcore_tecriscv uut(
 //////////////////////////////////////////////////////////////////////
 //Task y testbench
 //////////////////////////////////////////////////////////////////////
+
+//assign RX_UART=TX_UART; //temp
+
 initial begin
+   #20 tx_uart_driver(19200,8'h01,RX_UART,uart_busy);
+    //rx_uart_monitor(TX_UART,19200);
     out = $fopen("results.txt","w+");
     $fclose(out);
     out = $fopen("temp.txt","w+");
@@ -148,7 +153,7 @@ initial begin
     end
 	clk <= 0;
 	reset <= 1;
-	RX_UART <= 1;
+	//RX_UART <= 1;
 	maip <= 0; //ENTRADA NUEVA
 	prediction.delete();
   	exe_inst_queue.delete();
@@ -242,17 +247,20 @@ end
 always begin
     #25 clk=~clk;
     core_cov.clk = clk;
+    prueba();
+    rx_uart_monitor(TX_UART,19200);
 end
 
-always @(posedge clk)begin
+/*always @(posedge clk)begin
+	            //loaded_data_flag = 1;// temp
     core_cov.ctrl_fsm_state = topcore_tb.uut.TOP.central_control.cur_state[7:0];
-    cpi_measurement(inst_set,inst_set);
+   // cpi_measurement(inst_set,inst_set);
     prueba();
     //$display("Core Coverage %d",core_cov.clk);
     //core_coverage_collection(core_cov);
-    uart_comparison(uart_data,uart_predict,finish);
+    //uart_comparison(uart_data,uart_predict,finish);
     rx_uart_monitor(TX_UART,19200);
-    if(complete_uart_rx_data == 64'h8898968088888888) begin
+    if(complete_uart_rx_data == 64'h8898968000000001) begin
         if (loaded_data_flag == 0) begin
             out = $fopen("uart_data.txt","r");
             while (!$feof(out)) begin
@@ -290,7 +298,7 @@ always @(posedge clk)begin
             end
         end
     end
-end
+end*/
 
 task prueba();
   if ($time<4000000)begin
@@ -336,7 +344,7 @@ task prueba();
         stop_program_time = $realtime() - 100;
         //selfcheck(inst_queue,prediction,executed_inst,exe_inst_queue,csr_predict);
         if($value$plusargs("TESTNAME=%s",test_name)) begin
-            print_metrics_report();
+           // print_metrics_report();
         end
         else begin
             $display("WARNING: Plusargs +TESTNAME=<name> is missing. Metrics reports won't be generated.");
@@ -347,12 +355,12 @@ task prueba();
         stop_program_time = $realtime() - 100;
         //selfcheck(inst_queue,prediction,executed_inst,exe_inst_queue,csr_predict);
         if($value$plusargs("TESTNAME=%s",test_name)) begin
-            print_metrics_report();
+            //print_metrics_report();
         end
         else begin
             $display("WARNING: Plusargs +TESTNAME=<name> is missing. Metrics reports won't be generated.");
         end
-        $finish;
+       // $finish;
     end
     if (($realtime() - GPIO_timer) >= 400000) begin
 	GPIO_timer = $realtime();
